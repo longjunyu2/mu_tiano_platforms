@@ -217,10 +217,24 @@ class PlatformBuilder( UefiBuilder, BuildSettingsManager):
     def PlatformPostBuild(self):
         return 0
 
+    def BuildRustApp(self):
+        app_path = os.path.join(self.ws, "SBManage")
+        cmd = "cargo"
+        params = ("+nightly", "build", "-Z", "build-std=core,alloc", "-Z", "build-std-features=compiler-builtins-mem",
+                  "--target", "x86_64-unknown-uefi", "--manifest-path", os.path.join(app_path, "Cargo.toml"))
+        ret = RunCmd(cmd, " ".join(params))
+        result_path = os.path.join(
+            app_path, "target", "x86_64-unknown-uefi", "debug", "secure-boot-manager.efi")
+        return result_path if ret == 0 else None
+
     def FlashRomImage(self):
         #Make virtual drive - Allow caller to override path otherwise use default
         startupnsh = StartUpScriptManager()
         should_run_unit_tests = (self.env.GetValue("RUN_UNIT_TESTS").upper() == "TRUE")
+
+        rust_app_path = self.BuildRustApp()
+        if rust_app_path is None:
+            return -1
 
         if os.name == 'nt':
             DefaultVirtualDrivePath = os.path.join(self.env.GetValue("BUILD_OUTPUT_BASE"), "VirtualDrive.vhd")
@@ -243,7 +257,7 @@ class PlatformBuilder( UefiBuilder, BuildSettingsManager):
                 ut.copy_tests_to_virtual_drive(VirtualDrive, startupnsh)
             nshpath =  os.path.join(self.env.GetValue("BUILD_OUTPUT_BASE"), "startup.nsh")
             startupnsh.WriteOut(nshpath)
-            VirtualDrive.AddFile(nshpath)
+            VirtualDrive.AddFile(rust_app_path)
         else:
             logging.warning("Linux currently isn't supported for the virtual drive. Falling back to an older method")
             if should_run_unit_tests:
@@ -254,7 +268,8 @@ class PlatformBuilder( UefiBuilder, BuildSettingsManager):
                 os.makedirs(VirtualDrivePath)
             nshpath =  os.path.join(VirtualDrivePath, "startup.nsh")
             self.env.SetValue("VIRTUAL_DRIVE_PATH", VirtualDrivePath, "Set Virtual Drive path in case not set")
-            startupnsh.WriteOut(nshpath)
+            # startupnsh.WriteOut(nshpath)
+            shutil.copy(rust_app_path, VirtualDrive)
 
         ret = self.Helper.QemuRun(self.env)
         if ret != 0:
